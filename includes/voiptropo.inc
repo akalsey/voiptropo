@@ -30,17 +30,33 @@
  *
  * @return void
  */
-function _voiptropo_call_handler($tropo_action, $call_nid=NULL) {
+function _voiptropo_call_handler($tropo_action='process_inbound_calls', $call_nid=NULL) {
 
-$msg = "in voiptropo_call_handler() with tropo_action: $tropo_action, call_nid: $call_nid, and _REQUEST: " . print_r($_REQUEST, TRUE);
-$vars = array();
-watchdog('voiptropo', $msg, $vars, WATCHDOG_INFO);
-//dsm($msg);
+  try {
+    $session = new Session();
+	$json = json_decode(@file_get_contents('php://input')); 
+	$msg = "in voiptropo_call_handler() with tropo_action: $tropo_action, call_nid: $call_nid and Session ".print_r($json, TRUE);
+	$vars = array();
+	watchdog('voiptropo', $msg, $vars, WATCHDOG_INFO);
+	//Test
+	//$tropo=new Tropo();
+	
+	watchdog('voiptropo', 'JSON '.print_r($json->{"session"}->{"from"}->{"name"}, TRUE), $vars, WATCHDOG_INFO);
+	
+	
+	$incoming_sid = $session->getAccountID();
+  }
+  catch (TropoException $e) {
+    //var_dump($e);
+    watchdog('voiptropo', 'error in _voip_tropo_call_handler, Tropo reported: '.$e->getMessage(), array(), WATCHDOG_ERROR);
+	return FALSE;  // TODO: should we return an error response to the server?
+  }
 
   // validate $_REQUEST['AccountSid'] to avoid hack attempts
   $server = VoipServer::getServer('tropo');
   $server_config = $server->getConfig();
-  $account_sid = $server_config['voiptropo_account_sid'];
+  
+  /*$account_username = $server_config['voiptropo_account_username'];
   $incoming_sid = $_REQUEST['AccountSid'];
   if ($account_sid != $incoming_sid) {
      $msg = '_voip_tropo_call_handler called with invalid AccountSid: @sid';
@@ -48,7 +64,7 @@ watchdog('voiptropo', $msg, $vars, WATCHDOG_INFO);
      watchdog('voiptropo', $msg, $params, WATCHDOG_WARNING);
      return FALSE;  // TODO: should we return an error response to the server?
   }
-
+*/
   // handle incoming call requests
   if($tropo_action == 'process_inbound_calls') {
 
@@ -58,24 +74,21 @@ watchdog('voiptropo', $msg, $vars, WATCHDOG_INFO);
     $allowed = user_access('make inbound calls');
     if(!$allowed) {
       // log the issue
-      $msg = 'Unauthorized call received with AccountSid: @sid';
+      $msg = 'Unauthorized call received with Account ID: @sid';
       $params = array('@sid' => $incoming_sid);
       watchdog('voiptropo', $msg, $params, WATCHDOG_WARNING);
 
       // reject the call
-      $response = "<Reject />";
-      $rc = _voiptropo_send_response($response);
+	  $reject = new Reject();
       return;  // NOTE: this function MUST not return any value.  If it does,
                // the output to tropo will get messed up with Drupal hmtl...
     }
     
     $call = new VoipCall();
-    $call_sid = $_REQUEST['CallSid']; // unique identifier of the call, 34 char
+    $call_sid = $json->{"session"}->{"callId"}; // unique identifier of the call, 34 char
     $call->setCallId($call_sid);
     $call->setSource('tropo');
-    $dir_tmp = ($_REQUEST['Direction'] == 'inbound')
-                         ? VoipCall::INBOUND
-                         : VoipCall::OUTBOUND_DIAL;
+    $dir_tmp = VoipCall::INBOUND;
     $call->setDirection($dir_tmp);
     $call->setAnsweredBy(VoipCall::ANSWERED_DRUPAL);
     $call->setCallStatus(VoipCall::RINGING);
@@ -104,9 +117,10 @@ watchdog('voiptropo', $msg, $vars, WATCHDOG_INFO);
     // handle first response to an outbound call
     if($tropo_action == 'process_outbound_calls') {
       // store tropo call id for all outbound calls
-      $call_id = $_REQUEST['CallSid'];
+      $call_id = $json->{"session"}->{"callId"};
       $call->setCallId($call_id);
-      $answered_by = $_REQUEST['AnsweredBy'];
+      //TODO:
+	  //$answered_by = $_REQUEST['AnsweredBy'];
       if($answered_by) {
         $tmp = ($answered_by == 'human') ? VoipCall::ANSWERED_HUMAN
                                          : VoipCall::ANSWERED_MACHINE; 
@@ -117,12 +131,14 @@ watchdog('voiptropo', $msg, $vars, WATCHDOG_INFO);
 
   // update common call variables
   if(!$call->getCallerNumber())
+    //TODO:
     $call->setCallerNumber($_REQUEST['Caller']);
   if(!$call->getCallerName())
-    $call->setCallerName($_REQUEST['CallerName']);
+    $call->setCallerName($json->{"session"}->{"from"}->{"name"});
   if(!$call->getDestNumber())
-    $call->setDestNumber($_REQUEST['Called']);
-
+    //TODO: Check if this is always correct? In case of Skype it gives number.
+    $call->setDestNumber($json->{"session"}->{"to"}->{"name"});
+  //TODO:
   $tropo_call_status = $_REQUEST['CallStatus']; 
 
   // set start time for the call
@@ -139,14 +155,15 @@ watchdog('voiptropo', "tropo status: $tropo_call_status, call status: " . $call-
   // update call status
   // NOTE: sms callbacks do not have a call status associated with them
   if ($tropo_action == 'process_sms_callback'){
+    //TODO: Should we move sms callback to another menu callback?
     $call->SetCallStatus(VoipCall::IN_PROGRESS);
   }
   else{
     $call = voiptropo_update_call_status($call, $tropo_call_status);
   }
 
-  // update script variables with call location, if available
-  if(isset($_REQUEST['FromCity'])){
+  //TODO: Is this possible with Tropo? update script variables with call location, if available
+  /*if(isset($_REQUEST['FromCity'])){
     $call_location = array();
     $call_location['caller_city'] = $_REQUEST['FromCity'];
     $call_location['caller_state'] = $_REQUEST['FromState'];
@@ -159,7 +176,7 @@ watchdog('voiptropo', "tropo status: $tropo_call_status, call status: " . $call-
     $script = $call->getScript();
     $script->setVar('call_location', $call_location);
     $call->setScript($script);
-  }
+  }*/
 
   $is_hangup = $call->isHangup();
 
@@ -276,14 +293,21 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
   // process script commands
   $processing = TRUE;
   $response = '';
+  $tropo = new Tropo();
+
   while($processing) {
    
     $cmd = $script->getNextCommand();
-
+	
+	//Set script language
+	$language= $script->getLanguage();
+    $voice = $script->getVoice();
+    $tropo->setVoice($voice);
     if(!$cmd) {
       // no more commands to be processed
       // send a final hangup request 
-      $response .= '<Hangup/>';
+      //$response .= '<Hangup/>';
+	  $tropo->hangup();
       $msg = 'Script @name ended without a "hangup" command.';
       $params = array('@name' => $script->getName());
       watchdog('voiptropo', $msg, $params, WATCHDOG_WARNING);
@@ -313,14 +337,14 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
           $action = url($response_url, array('absolute' => TRUE));
           $method = 'POST';
           $number = $script->evalString($cmd->getParam('number'));
-          // TODO: implement the other features such as multi-dial, url(for private scripts) and sendDigits?
+          
           $timeout = $script->evalString($cmd->getParam('timeout', 30));
           $hangup_on_star =  $script->evalString($cmd->getParam('hangup_on_star', false));
           $hangup_on_star =  $hangup_on_star? 'true':'false';
           $time_limit = $script->evalString($cmd->getParam('time_limit', '14400'));
           $caller_number = $script->evalString($script->getVar('caller_number'));
           $caller_id = $script->evalString($cmd->getParam('caller_id', $caller_number)); 
-          $response .= '<Dial action="' . $action
+          /*$response .= '<Dial action="' . $action
                             . '" method="' . $method
                             . '" timeout="' . $timeout
                             . '" hangupOnStar="' . $hangup_on_star
@@ -328,7 +352,13 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
                             . '" callerId="' . $caller_id
                             . '" >';
           $response .= '<Number>' . $number . '</Number>';
-          $response .= '</Dial>';
+          $response .= '</Dial>';*/
+		  //TODO: What command for timeLimit, hangupOnStar?
+		  $params = array(
+		    'timeout' => $timeout,
+		    'from' => $caller_number,
+		  );
+		  $tropo->call($number, $params);
           $rc = TRUE;
           $processing = FALSE;
           break;
@@ -341,33 +371,39 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
           $action = url($response_url, array('absolute' => TRUE));
           $method = 'POST';
           $timeout = $script->evalString($cmd->getParam('timeout', 5)); 
-          $end_key = $script->evalString($cmd->getParam('end_key', '')); 
+          //$end_key = $script->evalString($cmd->getParam('end_key', '')); 
           $num_digits = $script->evalString($cmd->getParam('num_digits')); 
+		  if($num_digits<=1){
+		    $choices="[1 DIGIT]";
+		  }
+		  else{
+		    $choices="[$num_digits DIGITS]"
+		  }
           $text = $script->evalString($cmd->getParam('text')); 
-          $url = $script->evalString($cmd->getParam('url'));
-          $response .= '<Gather action="' . $action
+          //$url = $script->evalString($cmd->getParam('url'));
+          /*$response .= '<Gather action="' . $action
                             . '" method="' . $method
                             . '" timeout="' . $timeout
                             . '" finishOnKey="' . $end_key
                             . '" numDigits="' . $num_digits
-                            . '" >';
-          if($text) {
-            $language= $script->getLanguage();
-            $voice = $script->getVoice();
-            // translate the text
-            $langcode = $language;
-            $text = t($text, NULL, $langcode);
-            $response .= "<Say voice='$voice' language='$language'>$text</Say>";
+                            . '" >';*/
+          if(!$text) {
+		    $text = $script->evalString($cmd->getParam('url'));
           }
-          else if ($url) {
-            $response .= '<Play>' . $url . '</Play>';
-          }
-          $response .= '</Gather>';
+		  $params = array(
+		    'timeout' => $timeout,
+			'choices' => $choices,
+		  );
+          $tropo->ask($text, $params);
+          // $response .= '</Gather>';
           // in case of timeout or empty input, set Digits to VoipScript::NO_INPUT
-          $action_timeout = $action . '&amp;Digits=' . VoipScript::NO_INPUT;
+          /*$action_timeout = $action . '&amp;Digits=' . VoipScript::NO_INPUT;
           $response .= '<Redirect method="GET">'
                          . $action_timeout
-                         . '</Redirect>';
+                         . '</Redirect>';*/
+		  //TODO:				 
+		  $tropo->on(array("event" => "continue", "next" => $action));
+          //$tropo->on(array("event" => "incomplete", "next" => "http://whatsupserver.media.mit.edu/tamer/voiptest/outbound_call.php?uri=end"));			  
           $rc = TRUE;
           $processing = FALSE;
           break;
@@ -382,7 +418,10 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
               $rc = FALSE;
               $processing = FALSE;
               $found = TRUE;
-              $response .= "<Say>Processing error in gosub command.</Say>";
+              $text = "Processing error in gosub command.";
+			  $langcode = $language;
+              $text = t($text, NULL, $langcode);
+			  $tropo->say($text);
           }
           break;
 
@@ -396,7 +435,8 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
             $rc = FALSE;
             $processing = FALSE;
             $found = TRUE;
-            $response .= "<Say>$msg.</Say>";
+            //$response .= "<Say>$msg.</Say>";
+			$tropo->say($msg);
           }
           break;
 
@@ -412,7 +452,8 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
               $rc = FALSE;
               $processing = FALSE;
               $found = TRUE;
-              $response .= "<Say>$msg.</Say>";
+              //$response .= "<Say>$msg.</Say>";
+			  $tropo->say($msg);
             }
           }
           break;
@@ -422,7 +463,8 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
           $call->setHangupReason(VoipCall::HANGUP_SCRIPT_COMMAND);
           // send the hangup request and stop processing script commands
           // Note: this will trigger a response from tropo with $tropo_action = process_hangup and CallStatus = completed
-          $response .= '<Hangup/>';
+          //$response .= '<Hangup/>';
+		  $tropo->hangup();
           $processing = FALSE;
           break;
 
@@ -478,7 +520,8 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
             $rc = FALSE;
             $processing = FALSE;
             $found = TRUE;
-            $response .= "<Say>$msg.</Say>";
+            //$response .= "<Say>$msg.</Say>";
+			$tropo->say($msg);
           }
           break;
 
@@ -486,7 +529,10 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
           $call->setCallStatus(VoipCall::IN_PROGRESS);
           $url = $script->evalString($cmd->getParam('url'));
           $loop = $script->evalString($cmd->getParam('loop', 1));
-          $response .= '<Play loop="' . $loop . '" >' . $url . '</Play>';
+          //$response .= '<Play loop="' . $loop . '" >' . $url . '</Play>';
+		  foreach($loop as $i){
+		    $tropo->say($url);
+		  }
           break;
 
         case 'VoipCmdRecord':
@@ -527,10 +573,11 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
 
         case 'VoipCmdReject':
           $call->setHangupReason(VoipCall::HANGUP_REJECTED);
-          $reason_tmp = $script->evalString($cmd->getParam('reason'));
-          $reason =
-            ($reason_tmp == VoipScript::REJECT_BUSY)?'busy':'rejected';
-          $response .= "<Reject reason='$reason' />";
+          //TODO: Is there reason param in Tropo?
+		  //$reason_tmp = $script->evalString($cmd->getParam('reason'));
+          //$reason =($reason_tmp == VoipScript::REJECT_BUSY)?'busy':'rejected';
+          //$response .= "<Reject reason='$reason' />";
+		  $tropo->reject();
           $rc = TRUE;
           $processing = FALSE;
           break;
@@ -545,13 +592,12 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
             $processing = FALSE;
             $found = TRUE;
             // report the error to the phone user
-            $language= $script->getLanguage();
-            $voice = $script->getVoice();
             $text = 'Processing error. Please contact your system administrator.';
             // translate the text
             $langcode = $language;
             $text = t($text, NULL, $langcode);
-            $response .= "<Say voice='$voice' language='$language'>$text</Say>";
+            //$response .= "<Say voice='$voice' language='$language'>$text</Say>";
+			$tropo->say($text);
           }
           break;
 
@@ -560,16 +606,18 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
           $text = $script->evalString($cmd->getParam('text'));
           $loop = $script->evalString($cmd->getParam('loop'));
           // determine the language to be used
-          $language = $script->evalString($cmd->getParam('language'));
-          $language = $language ? $language : $script->getLanguage();
+          $cmd_language = $script->evalString($cmd->getParam('language'));
+          $cmd_language = $cmd_language ? $cmd_language : $script->getLanguage();
           // determine the voice to be used
-          $voice = $script->evalString($cmd->getParam('voice'));
-          $voice = $voice ? $voice : $script->getVoice();
+          $cmd_voice = $script->evalString($cmd->getParam('voice'));
+          $cmd_voice = $cmd_voice ? $cmd_voice : $script->getVoice();
           // translate the text
-          $langcode = $language;
+          $langcode = $cmd_language;
           $text = t($text, NULL, $langcode);
-          $response .= "<Say voice='$voice' language='$language' "
-                       . "loop='$loop'>$text</Say>";
+          /*$response .= "<Say voice='$voice' language='$language' "
+                       . "loop='$loop'>$text</Say>";*/
+		  $tropo->setVoice($cmd_voice);		   
+		  $tropo->say($text);	
           break;
 
         case 'VoipCmdSendSms';
@@ -639,33 +687,10 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
   $call->save();
 
   // send response back to tropo
-  if($response) {
-
-//$response .= '<!--' . "_REQUEST: " . print_r($_REQUEST,true) .  "\n" . '-->';
-//$response .= '<!--' . "voipcall: " . print_r($call,true) .  "\n" . '-->';
-
-    _voiptropo_send_response($response);
-  }
+  $tropo->renderJSON();
 
   return $rc;
 }
-
-/**
- * Send responses to tropo
- */
-function _voiptropo_send_response($response) {
-  $output .= '<?xml version="1.0" encoding="UTF-8" ?>';
-  $output .= '<Response>'; 
-  $output .= $response;
-  $output .= '</Response>';
-
-  drupal_set_header('Content-Type: text/xml; charset=utf-8');
-//TODO: watchdog('response', htmlspecialchars($output));
-  print $output;
-
-  return TRUE;
-}
-
 
 /**
  * Update 'call status' and 'hangup reason' based on tropo's response
