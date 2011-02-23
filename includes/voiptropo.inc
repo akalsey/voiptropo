@@ -30,29 +30,43 @@
  *
  * @return void
  */
-function _voiptropo_call_handler($tropo_action='process_inbound_calls', $call_nid=NULL) {
+function _voiptropo_call_handler($tropo_action='', $call_nid=NULL) {
 
   try {
     $session = new Session();
 	$json = json_decode(@file_get_contents('php://input')); 
+
+	if (empty($tropo_action)) {
+      $tropo_action = $session->getParameters('tropo_action');
+	  if (empty($tropo_action)) {
+	    $tropo_action = 'process_inbound_calls';
+	  }
+    }
+	if (empty($call_nid)) {
+	  $call_nid = $session->getParameters('call_nid');
+	}
 	$msg = "in voiptropo_call_handler() with tropo_action: $tropo_action, call_nid: $call_nid and Session ".print_r($json, TRUE);
 	$vars = array();
 	watchdog('voiptropo', $msg, $vars, WATCHDOG_INFO);
 	//Test
-	//$tropo=new Tropo();
-	
-	watchdog('voiptropo', 'JSON '.print_r($json->{"session"}->{"from"}->{"name"}, TRUE), $vars, WATCHDOG_INFO);
-	
-	
+	watchdog('voiptropo', 'JSON ' . print_r($json, TRUE), $vars, WATCHDOG_INFO);
+
 	$incoming_sid = $session->getAccountID();
   }
   catch (TropoException $e) {
-    //var_dump($e);
-    watchdog('voiptropo', 'error in _voip_tropo_call_handler, Tropo reported: '.$e->getMessage(), array(), WATCHDOG_ERROR);
-	return FALSE;  // TODO: should we return an error response to the server?
+    //$json = json_decode(@file_get_contents('php://input')); 
+	//watchdog('voiptropo', 'JSON ' . print_r($json, TRUE) . 'POST ' . print_r($_POST, TRUE), $vars, WATCHDOG_INFO);
+	try{
+	  $result = new Result();
+	  watchdog('voiptropo', 'Result ' . print_r($result, TRUE) , $vars, WATCHDOG_INFO);
+	}
+	catch(TropoException $e) {
+	  watchdog('voiptropo', 'error in _voip_tropo_call_handler, Tropo reported: '.$e->getMessage(), array(), WATCHDOG_ERROR);
+	  return FALSE;  // TODO: should we return an error response to the server?
+	}
   }
 
-  // validate $_REQUEST['AccountSid'] to avoid hack attempts
+  //TODO: validate $_REQUEST['AccountSid'] to avoid hack attempts
   $server = VoipServer::getServer('tropo');
   $server_config = $server->getConfig();
   
@@ -79,7 +93,10 @@ function _voiptropo_call_handler($tropo_action='process_inbound_calls', $call_ni
       watchdog('voiptropo', $msg, $params, WATCHDOG_WARNING);
 
       // reject the call
-	  $reject = new Reject();
+	  $tropo=new Tropo();
+	  $tropo->reject();
+	  $tropo->renderJSON();
+	 
       return;  // NOTE: this function MUST not return any value.  If it does,
                // the output to tropo will get messed up with Drupal hmtl...
     }
@@ -106,7 +123,8 @@ function _voiptropo_call_handler($tropo_action='process_inbound_calls', $call_ni
     // 'process_hangup' for incoming calls does not come with a $call_nid
     if($tropo_action == 'process_hangup') {
       if(!$call_nid) {
-        $call_id = $_REQUEST['CallSid'];
+        $call_id = $json->{"session"}->{"callId"};
+		//$call_id=$session->getId();  //Should we use session id instead?
         $call_nid = VoipCall::getNidFromCallId($call_id);
       }
     }
@@ -130,16 +148,22 @@ function _voiptropo_call_handler($tropo_action='process_inbound_calls', $call_ni
   }
 
   // update common call variables
-  if(!$call->getCallerNumber())
-    //TODO:
-    $call->setCallerNumber($_REQUEST['Caller']);
+  if(!$call->getCallerNumber()){
+    $caller_number = $session->getParameters('caller_number');
+	if(empty($caller_number)){
+	  $caller_number=$json->{"session"}->{"from"}->{"name"};
+	}
+	$call->setCallerNumber($caller_number);
+  }
+    
   if(!$call->getCallerName())
     $call->setCallerName($json->{"session"}->{"from"}->{"name"});
   if(!$call->getDestNumber())
-    //TODO: Check if this is always correct? In case of Skype it gives number.
-    $call->setDestNumber($json->{"session"}->{"to"}->{"name"});
+    $call->setDestNumber($session->getParameters('dest_number'));
+    //$call->setDestNumber($json->{"session"}->{"to"}->{"name"});
   //TODO:
-  $tropo_call_status = $_REQUEST['CallStatus']; 
+  $tropo_call_status='ringing';
+  //$tropo_call_status = $_REQUEST['CallStatus']; 
 
   // set start time for the call
   if($tropo_call_status == 'in-progress'){
@@ -199,11 +223,14 @@ watchdog('voiptropo', "tropo status: $tropo_call_status, updated call status: " 
         // been processed in the previous lines
         break;
       case 'process_dial':
-        $call = _voiptropo_process_dial_response($call, $_REQUEST);
+        $call = _voiptropo_process_dial_response($call, $session);
         break;
       case 'process_get_input':
         $script = $call->getScript();
-        $script->setVar('input_digits', $_REQUEST['Digits']);
+		//TODO: Check about this, it might not be same format as tropo allows speech input.
+        $script->setVar('input_digits', $result->getValue());
+		//TEST:
+		watchdog('voiptropo', 'Input received: '.$result->getValue(), array(), WATCHDOG_INFO);
         $call->setScript($script);
         break;
       case 'process_record':
@@ -238,7 +265,7 @@ watchdog('voiptropo', "tropo status: $tropo_call_status, updated call status: " 
       $duration  = $end_time - $start_time;
     }
     else {
-     // get call duration from tropo
+     //TODO: get call duration from tropo
      $duration = isset($_REQUEST['CallDuration'])?$_REQUEST['CallDuration']:NULL;
     }
     $call->setDuration($duration);
@@ -246,10 +273,22 @@ watchdog('voiptropo', "tropo status: $tropo_call_status, updated call status: " 
 
   // update the voipcall node with the new values
   $call = $call->save();
-
+  
+  $tropo = new Tropo();
+  if($tropo_action == 'process_outbound_calls') {
+    //Make outbound call
+    $dest_number =$call->getDestNumber();
+	$params = array(
+	  'from' => $call->getCallerNumber(),
+	);
+	$tropo->call($dest_number);
+  }
   // process the call script
-  $rc = _voiptropo_script_handler($call);
-
+  $rc = _voiptropo_script_handler($call, $tropo);
+  //$tropo->hangup();
+  // send response back to tropo
+  $tropo->renderJSON();
+  
   return;  // NOTE: this function MUST NOT return any value.  If it does, the
            //       output to tropo will get messed up with Drupal hmtl...
 }
@@ -261,7 +300,7 @@ watchdog('voiptropo', "tropo status: $tropo_call_status, updated call status: " 
  *
  * @return boolean.  TRUE on success or FALSE on failure.  Check voip_error() for processing failure.
  */
-function _voiptropo_script_handler($call) {
+function _voiptropo_script_handler($call, &$tropo) {
 $msg = 'Entering script_handler with voipcall: ' . print_r($call,true);
 watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
 
@@ -293,7 +332,7 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
   // process script commands
   $processing = TRUE;
   $response = '';
-  $tropo = new Tropo();
+  //$tropo = new Tropo();
 
   while($processing) {
    
@@ -361,6 +400,7 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
 		  $tropo->call($number, $params);
           $rc = TRUE;
           $processing = FALSE;
+		  watchdog('voiptropo', 'In dial.', array(), WATCHDOG_INFO);
           break;
 
         case 'VoipCmdGetInput':
@@ -369,15 +409,15 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
           $call_nid = $call->getNodeId();
           $response_url = $menu_path . '/process_get_input/' . $call_nid;
           $action = url($response_url, array('absolute' => TRUE));
-          $method = 'POST';
+          //$method = 'POST';
           $timeout = $script->evalString($cmd->getParam('timeout', 5)); 
-          //$end_key = $script->evalString($cmd->getParam('end_key', '')); 
+          $end_key = $script->evalString($cmd->getParam('end_key', '')); 
           $num_digits = $script->evalString($cmd->getParam('num_digits')); 
 		  if($num_digits<=1){
 		    $choices="[1 DIGIT]";
 		  }
 		  else{
-		    $choices="[$num_digits DIGITS]"
+		    $choices="[$num_digits DIGITS]";
 		  }
           $text = $script->evalString($cmd->getParam('text')); 
           //$url = $script->evalString($cmd->getParam('url'));
@@ -391,8 +431,11 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
 		    $text = $script->evalString($cmd->getParam('url'));
           }
 		  $params = array(
-		    'timeout' => $timeout,
+		    'attempts' => 3,
+		    //'timeout' => $timeout, TODO: Check why timeout of 5 sec is too short? Should it be 5.0?
 			'choices' => $choices,
+			'mode' => 'dtmf',
+			'terminator' => $end_key,
 		  );
           $tropo->ask($text, $params);
           // $response .= '</Gather>';
@@ -542,18 +585,22 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
           $format = $script->evalString($cmd->getParam('format'));
           if($format == 'mp3') {
             $response_url = $menu_path . '/process_record_mp3/' . $call_nid;
+			$record_format = 'audio/mp3';
           }
           else {
             // return wav file
             $response_url = $menu_path . '/process_record/' . $call_nid;
+			$record_format = 'audio/wav';
           }
-          $action = url($response_url, array('absolute' => TRUE));
+          $record_action = url($response_url, array('absolute' => TRUE));
           $method = 'POST';
           $timeout = $script->evalString($cmd->getParam('timeout', 5));
           $end_key = $script->evalString($cmd->getParam('end_key', '#'));
           $max_length = $script->evalString($cmd->getParam('max_length', 3600));
           // TODO: implement the "transcribe" feature?"
           $play_beep = $script->evalString($cmd->getParam('play_beep', 'true'));
+		  $response_url = $menu_path . '/process_empty_recording/' . $call_nid;
+          $timeout_action = url($response_url, array('absolute' => TRUE));
           $response .= '<Record action="' . $action
                             . '" method="' . $method
                             . '" timeout="' . $timeout
@@ -561,9 +608,19 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
                             . '" maxLength="' . $max_length
                             . '" playBeep="' . $play_beep
                             . '" />';
+		  
+          $params = array(
+		    'maxTime' => $timeout,
+			'beep' => $play_beep,
+			'onRecord' => $record_action,
+			'onTimeout' => $timeout_action,
+			'recordFormat' => $record_format,
+			'recordMethod' => $method,
+			'recordURI' => $record_uri, //TODO: What to put here?
+		  );		  
+		  $tropo->record($params);	 				
           // in case of empty recording...
-          $response_url = $menu_path . '/process_empty_recording/' . $call_nid;
-          $action = url($response_url, array('absolute' => TRUE));
+          
           $response .= '<Redirect method="GET">'
                          . $action
                          . '</Redirect>';
@@ -686,9 +743,11 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
   $call->setScript($script);
   $call->save();
 
-  // send response back to tropo
-  $tropo->renderJSON();
-
+  
+  //TESTING:
+$msg = "Tropo output ".print_r($tropo, TRUE);
+	$vars = array();
+	watchdog('voiptropo', $msg, $vars, WATCHDOG_INFO);
   return $rc;
 }
 

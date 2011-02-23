@@ -66,10 +66,10 @@ class VoipTropoServer extends VoipServer {
   function getDefaultVoice(){
     $server_config = $this->getConfig();
     $voice_id = $server_config['voiptropo_voice_id'];
-    $voices_available = self::_get_available_voices();
+    /*$voices_available = self::_get_available_voices();
     $voice_descriptor = $voices_available[$voice_id];
-    $voice = $voice_descriptor['voice'];
-    return $voice;
+    $voice = $voice_descriptor['voice'];*/
+    return $voice_id;
   }
 
 
@@ -111,20 +111,22 @@ class VoipTropoServer extends VoipServer {
                        ? $voipcall->getCallerNumber()
                        : variable_get('voipcall_cid_number', NULL);
     $dest_number = $voipcall->getDestNumber();
-
-    $menu_path = 'voip/tropo/callhandler';
+   
+    //$menu_path = 'voip/tropo/callhandler';
     $call_nid = $voipcall->getNodeId();
-    $response_url = $menu_path . '/process_outbound_calls/' . $call_nid;
+   /* $response_url = $menu_path . '/process_outbound_calls/' . $call_nid;
     $call_handler_url = url($response_url, array('absolute' => TRUE));
     $response_url = $menu_path . '/process_hangup/' . $call_nid;
     $status_callback_url = url($response_url, array('absolute' => TRUE));
-
+   */
     $vars = array(
 	  'action' => 'create',
       'username' => $username,
 	  'password' => $password,
-	  'Caller' => $caller_number,
-      'Called' => $dest_number,
+	  'caller_number' => $caller_number,
+      'dest_number' => $dest_number,
+	  'tropo_action' => 'process_outbound_calls',
+	  'call_nid' => $call_nid,
       //'Url' => $call_handler_url,
       //'Method' => 'POST',
       //'StatusCallback' => $status_callback_url,
