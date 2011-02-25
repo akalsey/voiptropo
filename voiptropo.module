@@ -95,8 +95,14 @@ function voiptropo_menu() {
     'page callback' => '_voiptropo_call_handler',
     'type' => MENU_CALLBACK,
   );
-
+  /*
+  $items['voip/tropo/filehandler'] = array(
+    'title' => 'Voip Tropo file handler',
+    'description' => 'Handles recorded files from Tropo.',
+    'access callback' => TRUE, 
+    'page callback' => '_voiptropo_file_handler',
+    'type' => MENU_CALLBACK,
+  );
+*/
   return $items;
 }
-
-

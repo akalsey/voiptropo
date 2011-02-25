@@ -31,8 +31,12 @@
  * @return void
  */
 function _voiptropo_call_handler($tropo_action='', $call_nid=NULL) {
-
-  try {
+  $server = VoipServer::getServer('tropo');
+  $server_config = $server->getConfig();
+  
+  if($tropo_action != 'save_record') {
+    //save_record doesn't have json
+	try {
     $session = new Session();
 	$json = json_decode(@file_get_contents('php://input')); 
 
@@ -54,8 +58,6 @@ function _voiptropo_call_handler($tropo_action='', $call_nid=NULL) {
 	$incoming_sid = $session->getAccountID();
   }
   catch (TropoException $e) {
-    //$json = json_decode(@file_get_contents('php://input')); 
-	//watchdog('voiptropo', 'JSON ' . print_r($json, TRUE) . 'POST ' . print_r($_POST, TRUE), $vars, WATCHDOG_INFO);
 	try{
 	  $result = new Result();
 	  watchdog('voiptropo', 'Result ' . print_r($result, TRUE) , $vars, WATCHDOG_INFO);
@@ -65,10 +67,10 @@ function _voiptropo_call_handler($tropo_action='', $call_nid=NULL) {
 	  return FALSE;  // TODO: should we return an error response to the server?
 	}
   }
-
+  }
+  
   //TODO: validate $_REQUEST['AccountSid'] to avoid hack attempts
-  $server = VoipServer::getServer('tropo');
-  $server_config = $server->getConfig();
+  
   
   /*$account_username = $server_config['voiptropo_account_username'];
   $incoming_sid = $_REQUEST['AccountSid'];
@@ -219,6 +221,7 @@ watchdog('voiptropo', "tropo status: $tropo_call_status, updated call status: " 
       case 'process_outbound_calls':
       case 'process_hangup':
       case 'process_conference':
+	  case 'process_record':
         // nothing special to be done here. the above commands have already
         // been processed in the previous lines
         break;
@@ -233,14 +236,23 @@ watchdog('voiptropo', "tropo status: $tropo_call_status, updated call status: " 
 		watchdog('voiptropo', 'Input received: '.$result->getValue(), array(), WATCHDOG_INFO);
         $call->setScript($script);
         break;
-      case 'process_record':
-      case 'process_record_mp3':
-        $suffix = ($tropo_action == 'process_record')? '.wav' : '.mp3';
+      case 'save_record':
+        $validators = array();
+		//$temp_dest=file_directory_temp();
+		$filename=$_FILES['filename']['name'];
+		$dest = file_directory_path();
+		$file = _voiptropo_file_save_upload($filename, $validators, $dest);
+  
+		watchdog('voiptropo', "File in callhandler".print_r($file, TRUE), $vars, WATCHDOG_INFO);
+        //$suffix = ($tropo_action == 'process_record')? '.wav' : '.mp3';
         $script = $call->getScript();
-        $script->setVar('recording_url', $_REQUEST['RecordingUrl'] . $suffix);
-        $script->setVar('recording_duration', $_REQUEST['RecordingDuration']);
-        $script->setVar('recording_digits', $_REQUEST['Digits']);
+        $script->setVar('recording_url', file_create_url($file->filepath));
+        $script->setVar('recording_duration', 1); //TODO: How to find duration?
+        $script->setVar('recording_digits', NULL);
         $call->setScript($script);
+		// update the voipcall node with the new values
+        $call = $call->save();
+        return;
         break;
       case 'process_empty_recording':
         $script = $call->getScript();
@@ -573,7 +585,7 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
           $url = $script->evalString($cmd->getParam('url'));
           $loop = $script->evalString($cmd->getParam('loop', 1));
           //$response .= '<Play loop="' . $loop . '" >' . $url . '</Play>';
-		  foreach($loop as $i){
+		  for($i=0;$i<$loop;$i++){
 		    $tropo->say($url);
 		  }
           break;
@@ -584,15 +596,17 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
           $call_nid = $call->getNodeId();
           $format = $script->evalString($cmd->getParam('format'));
           if($format == 'mp3') {
-            $response_url = $menu_path . '/process_record_mp3/' . $call_nid;
 			$record_format = 'audio/mp3';
           }
           else {
-            // return wav file
-            $response_url = $menu_path . '/process_record/' . $call_nid;
+            // return wav file        
 			$record_format = 'audio/wav';
           }
+		  $response_url = $menu_path . '/save_record/' . $call_nid;
           $record_action = url($response_url, array('absolute' => TRUE));
+		  
+		  $response_url = $menu_path . '/process_record/' . $call_nid;
+		  $success_action = url($response_url, array('absolute' => TRUE));
           $method = 'POST';
           $timeout = $script->evalString($cmd->getParam('timeout', 5));
           $end_key = $script->evalString($cmd->getParam('end_key', '#'));
@@ -601,29 +615,31 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
           $play_beep = $script->evalString($cmd->getParam('play_beep', 'true'));
 		  $response_url = $menu_path . '/process_empty_recording/' . $call_nid;
           $timeout_action = url($response_url, array('absolute' => TRUE));
-          $response .= '<Record action="' . $action
+          /*$response .= '<Record action="' . $action
                             . '" method="' . $method
                             . '" timeout="' . $timeout
                             . '" finishOnKey="' . $end_key
                             . '" maxLength="' . $max_length
                             . '" playBeep="' . $play_beep
                             . '" />';
-		  
+		  */
+		  $choices->terminator=$end_key;
           $params = array(
-		    'maxTime' => $timeout,
+		    'say' => '',
+			'maxTime' => $timeout,
 			'beep' => $play_beep,
-			'onRecord' => $record_action,
-			'onTimeout' => $timeout_action,
-			'recordFormat' => $record_format,
-			'recordMethod' => $method,
-			'recordURI' => $record_uri, //TODO: What to put here?
+			'format' => $record_format,
+			'method' => $method,
+			'url' => $record_action, //TODO: What to put here?
+			'choices' => $choices,	
 		  );		  
-		  $tropo->record($params);	 				
-          // in case of empty recording...
+		  $tropo->record($params);
+		  //What next:
+          $tropo->on(array("event" => "continue", "next" => $success_action));
+		  // in case of empty recording...
+          $tropo->on(array("event" => "incomplete", "next" => $timeout_action));		  
           
-          $response .= '<Redirect method="GET">'
-                         . $action
-                         . '</Redirect>';
+          
           $rc = TRUE;
           $processing = FALSE;
           break;
@@ -750,7 +766,85 @@ $msg = "Tropo output ".print_r($tropo, TRUE);
 	watchdog('voiptropo', $msg, $vars, WATCHDOG_INFO);
   return $rc;
 }
+/*
+function _voiptropo_file_handler($call_nid){
+  $validators = array();
+  $temp_dest=file_directory_temp();
+  $filename=$_FILES['filename']['name'];
+  $dest = file_directory_path();
+  
+  $file = _voiptropo_file_save_upload($filename, $validators, $dest);
+  
+  watchdog('voiptropo', "File ".print_r($file, TRUE)." _FILE ".print_r($_FILES, TRUE), $vars, WATCHDOG_INFO);
+}
+*/
+function _voiptropo_file_save_upload($source, $validators, $dest){
+  global $user;
+  $extensions='mp3 wav';
+   // Add in our check of the the file name length.
+  $validators['file_validate_name_length'] = array();
 
+// Begin building file object.
+    $file = new stdClass();
+    $file->filename = file_munge_filename(trim(basename($_FILES['filename']['name']), '.'), $extensions);
+    $file->filepath = $_FILES['filename']['tmp_name'];
+    $file->filemime = file_get_mimetype($file->filename);
+
+    $file->source = $source;
+    $file->destination = file_destination(file_create_path($dest . '/' . $file->filename), $replace);
+    $file->filesize = $_FILES['filename']['size'];
+
+    // Call the validation functions.
+    $errors = array();
+    foreach ($validators as $function => $args) {
+      array_unshift($args, $file);
+      // Make sure $file is passed around by reference.
+      $args[0] = &$file;
+      $errors = array_merge($errors, call_user_func_array($function, $args));
+    }
+
+    // Rename potentially executable files, to help prevent exploits.
+    if (preg_match('/\.(php|pl|py|cgi|asp|js)$/i', $file->filename) && (substr($file->filename, -4) != '.txt')) {
+      $file->filemime = 'text/plain';
+      $file->filepath .= '.txt';
+      $file->filename .= '.txt';
+      // As the file may be named example.php.txt, we need to munge again to
+      // convert to example.php_.txt, then create the correct destination.
+      $file->filename = file_munge_filename($file->filename, $extensions);
+      $file->destination = file_destination(file_create_path($dest . '/' . $file->filename), $replace);
+    }
+
+
+    // Check for validation errors.
+    if (!empty($errors)) {
+      $message = t('The selected file %name could not be uploaded.', array('%name' => $file->filename));
+      if (count($errors) > 1) {
+        $message .= '<ul><li>' . implode('</li><li>', $errors) . '</li></ul>';
+      }
+      else {
+        $message .= ' ' . array_pop($errors);
+      }
+       drupal_set_message($message);
+      return 0;
+    }
+
+    // Move uploaded files from PHP's upload_tmp_dir to Drupal's temporary directory.
+    // This overcomes open_basedir restrictions for future file operations.
+    $file->filepath = $file->destination;
+    if (!move_uploaded_file($_FILES['filename']['tmp_name'], $file->filepath)) {
+      form_set_error($source, t('File upload error. Could not move uploaded file.'));
+      watchdog('file', 'Upload error. Could not move uploaded file %file to destination %destination.', array('%file' => $file->filename, '%destination' => $file->filepath));
+      return 0;
+    }
+
+    // If we made it this far it's safe to record this file in the database.
+    $file->uid = $user->uid;
+    $file->status = FILE_STATUS_TEMPORARY;
+    $file->timestamp = time();
+    drupal_write_record('files', $file);
+    return $file;
+
+}
 /**
  * Update 'call status' and 'hangup reason' based on tropo's response
  */
