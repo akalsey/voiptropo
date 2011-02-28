@@ -84,10 +84,8 @@ function _voiptropo_call_handler($tropo_action='', $call_nid=NULL, $dial_respons
   // handle incoming call requests
   if($tropo_action == 'process_inbound_calls') {
 
-    // make sure incoming calls are allowed in the system
-    // NOTE: Since incoming calls always arrive with anonymous user, make sure
-    //   that anonymous users have permission to make inbound calls
-    $allowed = user_access('make inbound calls');
+    //make inbound calls permission deprecated.
+    /*$allowed = user_access('make inbound calls');
     if(!$allowed) {
       // log the issue
       $msg = 'Unauthorized call received with Account ID: @sid';
@@ -101,7 +99,7 @@ function _voiptropo_call_handler($tropo_action='', $call_nid=NULL, $dial_respons
 	 
       return;  // NOTE: this function MUST not return any value.  If it does,
                // the output to tropo will get messed up with Drupal hmtl...
-    }
+    }*/
     
     $call = new VoipCall();
     $call_sid = $json->{"session"}->{"callId"}; // unique identifier of the call, 34 char
