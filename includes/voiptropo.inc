@@ -994,19 +994,19 @@ function _voiptropo_process_sms_response($call, $request){
       $msg = 'SMS sendind failed for call nid: @nid. Make sure your tropo number is sms-enabled.';
       $params = array('@nid' => $call_nid);
       watchdog('voiptropo', $msg, $params, WATCHDOG_WARNING);
-      $sms_status = VoipScript::SMS_FAILED;
+      $sms_status = VoipCall::SMS_FAILED;
       break;
     case 'invalid':
       $msg = 'Invalid SMS parameter for call nid: @nid';
       $params = array('@nid' => $call_nid);
       watchdog('voiptropo', $msg, $params, WATCHDOG_WARNING);
-      $sms_status = VoipScript::SMS_INVALID;
+      $sms_status = VoipCall::SMS_INVALID;
       break;
     case 'sending':
-      $sms_status = VoipScript::SMS_SENDING;
+      $sms_status = VoipCall::SMS_SENDING;
       break;
     case 'sent':
-      $sms_status = VoipScript::SMS_SENT;
+      $sms_status = VoipCall::SMS_SENT;
       break;
   }
   $call->setSmsStatus($sms_status);
