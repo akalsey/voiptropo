@@ -596,22 +596,7 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
         case 'VoipCmdLabel':
           // don't do anything. Labels are just placeholders that mark a position within the script.
           break;
-
-        case 'VoipCmdLoad':
-          $script_name = $script->evalString($cmd->getParam('script_name', ''));
-          $rc = $script->runLoad($script_name);
-          if($script->isError()){
-            $msg = $script->getErrorMessage();
-            $params = array();
-            $call->report_error('voiptropo', $msg, $params);
-            $rc = FALSE;
-            $processing = FALSE;
-            $found = TRUE;
-            //$response .= "<Say>$msg.</Say>";
-			$tropo->say($msg);
-          }
-          break;
-		  
+  
         case 'VoipCmdRecord':
           $call->setCallStatus(VoipCall::IN_PROGRESS);
           $menu_path = 'voip/tropo/callhandler';
