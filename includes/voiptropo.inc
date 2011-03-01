@@ -9,7 +9,6 @@
 /**
  * Internal functions
  */
-
 /*
  * Process incoming requests and responses from tropo
  *
@@ -612,17 +611,7 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
 			$tropo->say($msg);
           }
           break;
-
-        case 'VoipCmdPlay':
-          $call->setCallStatus(VoipCall::IN_PROGRESS);
-          $url = $script->evalString($cmd->getParam('url'));
-          $loop = $script->evalString($cmd->getParam('loop', 1));
-          //$response .= '<Play loop="' . $loop . '" >' . $url . '</Play>';
-		  for($i=0;$i<$loop;$i++){
-		    $tropo->say($url);
-		  }
-          break;
-
+		  
         case 'VoipCmdRecord':
           $call->setCallStatus(VoipCall::IN_PROGRESS);
           $menu_path = 'voip/tropo/callhandler';
@@ -709,21 +698,27 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
 
         case 'VoipCmdSay':
           $call->setCallStatus(VoipCall::IN_PROGRESS);
-          $text = $script->evalString($cmd->getParam('text'));
+          $prompt = $script->evalString($cmd->getParam('prompt'));
           $loop = $script->evalString($cmd->getParam('loop'));
-          // determine the language to be used
-          $cmd_language = $script->evalString($cmd->getParam('language'));
-          $cmd_language = $cmd_language ? $cmd_language : $script->getLanguage();
-          // determine the voice to be used
-          $cmd_voice = $script->evalString($cmd->getParam('voice'));
-          $cmd_voice = $cmd_voice ? $cmd_voice : $script->getVoice();
-          // translate the text
-          $langcode = $cmd_language;
-          $text = t($text, NULL, $langcode);
-          /*$response .= "<Say voice='$voice' language='$language' "
-                       . "loop='$loop'>$text</Say>";*/
-		  $tropo->setVoice($cmd_voice);		   
-		  $tropo->say($text);	
+          if(_voiptropo_is_url($prompt)){
+		    $text=$prompt;
+		  }
+		  else{
+		     // determine the language to be used
+            $cmd_language = $script->evalString($cmd->getParam('language'));
+            $cmd_language = $cmd_language ? $cmd_language : $script->getLanguage();
+            // determine the voice to be used
+            $cmd_voice = $script->evalString($cmd->getParam('voice'));
+            $cmd_voice = $cmd_voice ? $cmd_voice : $script->getVoice();
+            // translate the text
+            $langcode = $cmd_language;
+            $text = t($prompt, NULL, $langcode);
+			//Do we need to do it here?
+			$tropo->setVoice($cmd_voice);		
+		  }
+          for($i=0;$i<$loop;$i++){
+		    $tropo->say($text);	
+		  }
           break;
 
         case 'VoipCmdSendSms';
@@ -1011,4 +1006,12 @@ function _voiptropo_process_sms_response($call, $request){
   }
   $call->setSmsStatus($sms_status);
   return $call;
+}
+
+/**
+ * Check if the given string is a url
+ */
+function _voiptropo_is_url($str) {
+  $rc = preg_match('#(https?://\S+(?<![,.]))#', $str);
+  return $rc;
 }
