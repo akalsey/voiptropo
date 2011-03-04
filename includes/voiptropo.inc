@@ -214,12 +214,12 @@ watchdog('voiptropo', "tropo status: $tropo_call_status, updated call status: " 
 		break;
       case 'process_inbound_calls':
       case 'process_hangup':
-      case 'process_conference':
 	  case 'process_record':
         // nothing special to be done here. the above commands have already
         // been processed in the previous lines
         break;
       case 'process_dial':
+	  case 'process_conference':
         $call = _voiptropo_process_dial_response($call, $result, $dial_response_name);
         break;
 	  case 'process_callstatus':
@@ -434,7 +434,6 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
           $call_nid = $call->getNodeId();
           $response_url = $menu_path . '/process_get_input/' . $call_nid;
           $action = url($response_url, array('absolute' => TRUE));
-          //$method = 'POST';
           $timeout = $script->evalString($cmd->getParam('timeout', 5)); 
           $end_key = $script->evalString($cmd->getParam('end_key', '')); 
           $num_digits = $script->evalString($cmd->getParam('num_digits')); 
@@ -444,17 +443,8 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
 		  else{
 		    $choices="[$num_digits DIGITS]";
 		  }
-          $text = $script->evalString($cmd->getParam('text')); 
-          //$url = $script->evalString($cmd->getParam('url'));
-          /*$response .= '<Gather action="' . $action
-                            . '" method="' . $method
-                            . '" timeout="' . $timeout
-                            . '" finishOnKey="' . $end_key
-                            . '" numDigits="' . $num_digits
-                            . '" >';*/
-          if(!$text) {
-		    $text = $script->evalString($cmd->getParam('url'));
-          }
+          $prompt = $script->evalString($cmd->getParam('prompt')); 		  
+
 		  $params = array(
 		    'attempts' => 3,
 		    //'timeout' => $timeout, TODO: Check why timeout of 5 sec is too short? Should it be 5.0?
@@ -463,13 +453,8 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
 			//'terminator' => $end_key,
 			'terminator' => '',
 		  );
-          $tropo->ask($text, $params);
-          // $response .= '</Gather>';
-          // in case of timeout or empty input, set Digits to VoipScript::NO_INPUT
-          /*$action_timeout = $action . '&amp;Digits=' . VoipScript::NO_INPUT;
-          $response .= '<Redirect method="GET">'
-                         . $action_timeout
-                         . '</Redirect>';*/
+          $tropo->ask($prompt, $params);
+         
 		  //TODO:				 
 		  $tropo->on(array("event" => "continue", "next" => $action));
           //$tropo->on(array("event" => "incomplete", "next" => "http://whatsupserver.media.mit.edu/tamer/voiptest/outbound_call.php?uri=end"));			  
@@ -685,12 +670,9 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
           $call->setCallStatus(VoipCall::IN_PROGRESS);
           $prompt = $script->evalString($cmd->getParam('prompt'));
           $loop = $script->evalString($cmd->getParam('loop'));
-          if(_voiptropo_is_url($prompt)){
-		    $text=$prompt;
-		  }
-		  else{
+      
 		     // determine the language to be used
-            $cmd_language = $script->evalString($cmd->getParam('language'));
+           /* $cmd_language = $script->evalString($cmd->getParam('language'));
             $cmd_language = $cmd_language ? $cmd_language : $script->getLanguage();
             // determine the voice to be used
             $cmd_voice = $script->evalString($cmd->getParam('voice'));
@@ -700,9 +682,9 @@ watchdog('voiptropo', $msg, array(), WATCHDOG_INFO);
             $text = t($prompt, NULL, $langcode);
 			//Do we need to do it here?
 			$tropo->setVoice($cmd_voice);		
-		  }
+		  */
           for($i=0;$i<$loop;$i++){
-		    $tropo->say($text);	
+		    $tropo->say($prompt);	
 		  }
           break;
 
@@ -991,12 +973,4 @@ function _voiptropo_process_sms_response($call, $request){
   }
   $call->setSmsStatus($sms_status);
   return $call;
-}
-
-/**
- * Check if the given string is a url
- */
-function _voiptropo_is_url($str) {
-  $rc = preg_match('#(https?://\S+(?<![,.]))#', $str);
-  return $rc;
 }
